@@ -35,7 +35,11 @@ class BonusAgentTests(unittest.TestCase):
         self.assertIn('DigitalOcean',p.histories[0][0]['content'])
     def test_429_observation_returns_to_model(self):
         t=BonusTools(scenario='rate_limit_once')
-        p=ScriptedProvider([call('a','get_vercel_status',{}),call('b','get_vercel_status',{}),final()])
+        p=ScriptedProvider([
+            call('a','get_vercel_status',{}),
+            call('b','get_vercel_status',{}),
+            final('Nguồn: https://www.vercel-status.com'),
+        ])
         result=run_agent('Kiểm tra',p,t,max_steps=5)
         self.assertEqual(result['status'],'completed')
         self.assertEqual(json.loads(p.histories[1][-1]['content'])['error'],'RATE_LIMITED')
@@ -50,5 +54,59 @@ class BonusAgentTests(unittest.TestCase):
         self.assertEqual(result['status'],'completed')
         self.assertEqual(json.loads(p.histories[1][-1]['content'])['error'],'INVALID_ARGUMENTS')
         self.assertTrue(json.loads(p.histories[2][-1]['content'])['ok'])
+
+    def test_persistent_rate_limit_is_bounded_to_three_tool_calls(self):
+        t=BonusTools(scenario='rate_limit_always')
+        p=ScriptedProvider([
+            call('a','get_vercel_status',{}),
+            call('b','get_vercel_status',{}),
+            call('c','get_vercel_status',{}),
+            call('d','get_vercel_status',{}),
+            final('Vercel chưa thể kiểm tra do rate limit liên tục.'),
+        ])
+        result=run_agent('Kiểm tra Vercel',p,t,max_steps=5)
+        tool_events=[x for x in result['trace'] if x['event']=='tool' and x['name']=='get_vercel_status']
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(len(tool_events),3)
+        self.assertEqual(t.calls[('get_vercel_status','vercel')],3)
+        self.assertTrue(any(x['event']=='retry_blocked' for x in result['trace']))
+        blocked=json.loads(p.histories[4][-1]['content'])
+        self.assertEqual(blocked['error'],'RETRY_LIMIT_EXCEEDED')
+
+    def test_noisy_tool_data_is_summarized_before_model_observation(self):
+        t=BonusTools(scenario='noisy')
+        p=ScriptedProvider([
+            call('a','get_vercel_status',{}),
+            final('Vercel status snapshot đã được kiểm tra. https://www.vercel-status.com'),
+        ])
+        result=run_agent('Kiểm tra Vercel',p,t)
+        tool_event=next(x for x in result['trace'] if x['event']=='tool')
+        tool_result=json.loads(p.histories[1][-1]['content'])
+        self.assertEqual(result['status'],'completed')
+        self.assertNotIn('distractors',tool_event['result'])
+        self.assertEqual(tool_result['distractors_omitted'],160)
+        self.assertNotIn('Synthetic archived notice',p.histories[1][-1]['content'])
+
+    def test_long_retry_after_stops_without_another_tool_request(self):
+        class LimitedTools:
+            schemas=BonusTools.schemas
+            system_prompt=BonusTools.system_prompt
+            calls=0
+            def execute(self,name,args):
+                self.calls+=1
+                return {'ok':False,'error':'RATE_LIMITED','retry_after_seconds':6,'retriable':True}
+
+        t=LimitedTools()
+        p=ScriptedProvider([
+            call('a','get_vercel_status',{}),
+            call('b','get_vercel_status',{}),
+            final('Vercel chưa thể kiểm tra trong thời gian chờ cho phép.'),
+        ])
+        result=run_agent('Kiểm tra Vercel',p,t,max_steps=3)
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(t.calls,1)
+        self.assertTrue(any(x['event']=='retry_blocked' for x in result['trace']))
+        blocked=json.loads(p.histories[2][-1]['content'])
+        self.assertEqual(blocked['error'],'RATE_LIMITED')
 
 if __name__=='__main__': unittest.main()

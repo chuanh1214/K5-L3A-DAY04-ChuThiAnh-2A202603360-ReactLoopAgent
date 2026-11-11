@@ -34,3 +34,11 @@ Trace H5 cho thấy `get_status` của GitHub trả trạng thái thật cùng t
 ## 5. Giới hạn
 
 Điểm được chấm bằng LLM judge nên chỉ là ước lượng, có thể thiên lệch hoặc dao động; cần đối chiếu expected, câu trả lời và trace. Snapshot phản ánh dữ liệu tại thời điểm chụp, không phải trạng thái hiện tại; tool chỉ tìm trong 50 incident gần nhất và chi tiết incident có thể bị lược bớt. Mỗi phiên bản chỉ chạy một lần nên chưa chứng minh mức cải thiện ổn định; chênh lệch điểm giữa hai lần có thể do biến thiên của model/judge, không chỉ do thay đổi system prompt.
+
+## Bonus
+
+- Kết quả: `eval_bonus.json` chấm đủ 10/10 case, đạt 98.8/100, tương đương 14.82/15 theo quy đổi tham khảo. Dùng OpenRouter với model `deepseek/deepseek-v4.1-flash-1017`.
+- Retry: lỗi `RATE_LIMITED` được trả lại cho model; cùng thao tác bị giới hạn tối đa 3 lần. Nếu có `Retry-After`, chỉ chờ khi thời gian không quá 5 giây; nếu vượt mức đó thì dừng và báo chưa xác minh, không coi rate limit là outage. Lỗi tham số `INVALID_ARGUMENTS` được đưa lại làm observation để model sửa kiểu/giá trị.
+- Pagination: tool đọc timeline theo `offset` và `limit` (1–3); agent có thể gọi trang tiếp khi cần và phải dựa vào `next_offset`, không tuyên bố đã đọc hết nếu còn trang.
+- Context: với case dữ liệu nhiễu, agent bỏ qua 160 mục giả lập không liên quan thay vì đưa chúng vào context; câu trả lời tập trung vào incident và nguồn phù hợp.
+- Giới hạn còn lại: judge có thể dao động và snapshot không phản ánh trạng thái hiện tại. Một số câu trả lời vẫn có diễn đạt nhỏ chưa chính xác theo nhận xét judge (B3 về giới hạn retry, B5 có chi tiết Cloudflare thừa, B9 gọi nhầm provider có snapshot mới nhất); cần đối chiếu trace thay vì xem điểm là bằng chứng tuyệt đối.
